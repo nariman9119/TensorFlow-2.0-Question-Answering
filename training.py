@@ -1,18 +1,12 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import os
 import sys
 import json
 import tensorflow as tf
 import numpy as np
-#import pandas as pd
+import pandas as pd
+import matplotlib.pyplot as plt
 import absl
 import datetime
-from tqdm import tqdm
 from tensorflow.keras.optimizers import Adam
 from adamw_optimizer import AdamW
 from tensorflow.python.lib.io.file_io import recursive_create_dir
@@ -20,29 +14,29 @@ from tensorflow.python.lib.io.file_io import recursive_create_dir
 print(tf.__version__)
 
 
-# In[2]:
+# # ----------------------------------------------------------------------------------------
+# Ref: https://colab.research.google.com/github/tensorflow/tpu/blob/master/tools/colab/custom_training.ipynb#scrollTo=jwJtsCQhHK-E
 
 
 # Your TPU node internal ip
-TPU_WORKER = 'grpc://10.1.17.202:8470'
+TPU_WORKER = 'grpc://XXX.XXX.XXX.XXX:8470'
 
 # Your TPU Zone, for example 'europe-west4-a'
-ZONE = 'europe-west4-a'
+ZONE = ''
 
 # Your project name, for example, 'kaggle-nq-123456'
-PROJECT = 'tensorflow-qa-kaggle'
+PROJECT = ''
 
 # Your training tf record file on Google Storage bucket. For example, gs://kaggle-my-nq-competition/nq_train.tfrecord
-TRAIN_TF_RECORD = 'gs://tf-qa/nq-train.tfrecords'
+TRAIN_TF_RECORD = ''
 
 # Your checkpoint dir on Google Storage bucket. For example, "gs://kaggle-my-nq-competition/checkpoints/"
-CHECKPOINT_DIR = 'gs://tf-qa/cp/'
+CHECKPOINT_DIR = ''
 
 
 tf.keras.backend.clear_session()
 
-
-# In[3]:
+# # ----------------------------------------------------------------------------------------
 
 
 IS_KAGGLE = True
@@ -63,7 +57,8 @@ if not os.path.isdir(INPUT_DIR):
     INPUT_DIR = "./"
     NQ_DIR = "./"
     MY_OWN_NQ_DIR = "./"
-    
+
+
 for dirname, _, filenames in os.walk(INPUT_DIR):
     for filename in filenames:
         print(os.path.join(dirname, filename))
@@ -72,16 +67,6 @@ for dirname, _, filenames in os.walk(INPUT_DIR):
 # NQ_DIR contains some packages / modules
 sys.path.append(NQ_DIR)
 sys.path.append(os.path.join(NQ_DIR, "transformers"))
-
-
-# In[4]:
-
-
-get_ipython().system('python --version')
-
-
-# In[5]:
-
 
 from nq_flags import DEFAULT_FLAGS as FLAGS
 from nq_flags import del_all_flags
@@ -102,9 +87,6 @@ from transformers import TFBertMainLayer, TFDistilBertMainLayer, TFBertPreTraine
 from transformers.modeling_tf_utils import get_initializer
 
 
-# In[6]:
-
-
 PRETRAINED_MODELS = {
     "BERT": [
         'bert-base-uncased',
@@ -114,9 +96,6 @@ PRETRAINED_MODELS = {
         'distilbert-base-uncased-distilled-squad'
     ]
 }
-
-
-# In[7]:
 
 
 flags = absl.flags
@@ -188,11 +167,11 @@ flags.DEFINE_string(
 
 flags.DEFINE_string("model_dir", NQ_DIR, "Root dir of all Hugging Face's models")
 
-flags.DEFINE_string("model_name", "bert-large-uncased-whole-word-masking-finetuned-squad", "Name of Hugging Face's model to use.")
+flags.DEFINE_string("model_name", "distilbert-base-uncased-distilled-squad", "Name of Hugging Face's model to use.")
 
-flags.DEFINE_integer("epochs", 3, "Total epochs for training.")
+flags.DEFINE_integer("epochs", 0, "Total epochs for training.")
 
-flags.DEFINE_integer("train_batch_size", 8 * 8, "Batch size for training.")
+flags.DEFINE_integer("train_batch_size", 64 * 8, "Batch size for training.")
 
 flags.DEFINE_integer("shuffle_buffer_size", 100000, "Shuffle buffer size for training.")
 
@@ -206,17 +185,12 @@ flags.DEFINE_integer("num_warmup_steps", 0, "Number of training steps to perform
 
 flags.DEFINE_integer("num_train_examples", None, "Number of precomputed training steps in 1 epoch.")
 
-
-# In[8]:
-
-
 # Make the default flags as parsed flags
 FLAGS.mark_as_parsed()
 
 NB_SHORT_ANSWER_TYPES = 5
 
-
-# In[9]:
+# ----------------------------------------------------------------------------------------
 
 
 def get_dataset(tf_record_file, seq_length, batch_size=1, shuffle_buffer_size=0, is_training=False):
@@ -285,7 +259,7 @@ def get_dataset(tf_record_file, seq_length, batch_size=1, shuffle_buffer_size=0,
     return dataset
 
 
-# In[10]:
+# ----------------------------------------------------------------------------------------
 
 
 cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(tpu=TPU_WORKER, zone=ZONE, project=PROJECT)
@@ -294,15 +268,14 @@ tf.tpu.experimental.initialize_tpu_system(cluster_resolver)
 tpu_strategy = tf.distribute.experimental.TPUStrategy(cluster_resolver)
 
 
-# In[11]:
-
+# ----------------------------------------------------------------------------------------
 
 
 if FLAGS.num_train_examples is None:
     FLAGS.num_train_examples = 494670
 
 
-# In[12]:
+# ----------------------------------------------------------------------------------------
 
 
 class TFNQModel:
@@ -322,11 +295,11 @@ class TFNQModel:
         self.seq_output_dropout = tf.keras.layers.Dropout(kwargs.get('seq_output_dropout_prob', 0.05))
         self.pooled_output_dropout = tf.keras.layers.Dropout(kwargs.get('pooled_output_dropout_prob', 0.05))
     
-        self.pos_classifier = tf.keras.layers.Dense(2,
+        self.short_pos_classifier = tf.keras.layers.Dense(2,
                                         kernel_initializer=get_initializer(config.initializer_range),
                                         name='pos_classifier')       
 
-        self.answer_type_classifier = tf.keras.layers.Dense(NB_SHORT_ANSWER_TYPES,
+        self.short_answer_type_classifier = tf.keras.layers.Dense(NB_SHORT_ANSWER_TYPES,
                                         kernel_initializer=get_initializer(config.initializer_range),
                                         name='answer_type_classifier')        
                 
@@ -353,22 +326,18 @@ class TFNQModel:
         sequence_output = self.seq_output_dropout(sequence_output, training=kwargs.get('training', False))
         pooled_output = self.pooled_output_dropout(pooled_output, training=kwargs.get('training', False))
     
-        short_pos_logits = self.pos_classifier(sequence_output)  # shape = (batch_size, seq_len, 2)
+        short_pos_logits = self.short_pos_classifier(sequence_output)  # shape = (batch_size, seq_len, 2)
         
         short_start_pos_logits = short_pos_logits[:, :, 0]  # shape = (batch_size, seq_len)
         short_end_pos_logits = short_pos_logits[:, :, 1]  # shape = (batch_size, seq_len)
         
-        short_answer_type_logits = self.answer_type_classifier(pooled_output)  # shape = (batch_size, NB_SHORT_ANSWER_TYPES)
+        short_answer_type_logits = self.short_answer_type_classifier(pooled_output)  # shape = (batch_size, NB_SHORT_ANSWER_TYPES)
 
         outputs = (short_start_pos_logits, short_end_pos_logits, short_answer_type_logits)
 
         return outputs  # logits
     
-
-
-# In[13]:
-
-
+    
 class TFBertForNQ(TFNQModel, TFBertPreTrainedModel):
     
     def __init__(self, config, *inputs, **kwargs):
@@ -384,9 +353,6 @@ class TFBertForNQ(TFNQModel, TFBertPreTrainedModel):
         sequence_output, pooled_output = outputs[0], outputs[1]  # shape = (batch_size, seq_len, hidden_dim) / (batch_size, hidden_dim)
         
         return sequence_output, pooled_output
-
-
-# In[14]:
 
 
 class TFDistilBertForNQ(TFNQModel, TFDistilBertPreTrainedModel):
@@ -417,16 +383,10 @@ class TFDistilBertForNQ(TFNQModel, TFDistilBertPreTrainedModel):
         return sequence_output, pooled_output
 
 
-# In[15]:
-
-
 model_mapping = {
     "bert": TFBertForNQ,
     "distilbert": TFDistilBertForNQ
 }
-
-
-# In[16]:
 
 
 def get_pretrained_model(model_name):
@@ -447,22 +407,19 @@ def get_pretrained_model(model_name):
 
 def get_metrics(name):
 
-    loss = tf.keras.metrics.Mean(name='{}_loss'.format(name))
+    loss = tf.keras.metrics.Mean(name=f'{name}_loss')
 
-    loss_short_start_pos = tf.keras.metrics.Mean(name=name + '_loss_short_start_pos')
-    loss_short_end_pos = tf.keras.metrics.Mean(name=name + '_loss_short_end_pos')
-    loss_short_ans_type = tf.keras.metrics.Mean(name=name + '_loss_short_ans_type')
+    loss_short_start_pos = tf.keras.metrics.Mean(name=f'{name}_loss_short_start_pos')
+    loss_short_end_pos = tf.keras.metrics.Mean(name=f'{name}_loss_short_end_pos')
+    loss_short_ans_type = tf.keras.metrics.Mean(name=f'{name}_loss_short_ans_type')
     
-    acc = tf.keras.metrics.SparseCategoricalAccuracy(name=name + '_acc')
+    acc = tf.keras.metrics.SparseCategoricalAccuracy(name=f'{name}_acc')
     
-    acc_short_start_pos = tf.keras.metrics.SparseCategoricalAccuracy(name=name + '_acc_short_start_pos')
-    acc_short_end_pos = tf.keras.metrics.SparseCategoricalAccuracy(name=name + '_acc_short_end_pos')
-    acc_short_ans_type = tf.keras.metrics.SparseCategoricalAccuracy(name=name + '_acc_short_ans_type')
+    acc_short_start_pos = tf.keras.metrics.SparseCategoricalAccuracy(name=f'{name}_acc_short_start_pos')
+    acc_short_end_pos = tf.keras.metrics.SparseCategoricalAccuracy(name=f'{name}_acc_short_end_pos')
+    acc_short_ans_type = tf.keras.metrics.SparseCategoricalAccuracy(name=f'{name}_acc_short_ans_type')
     
     return loss, loss_short_start_pos, loss_short_end_pos, loss_short_ans_type, acc, acc_short_start_pos, acc_short_end_pos, acc_short_ans_type
-
-
-# In[17]:
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.PolynomialDecay):
@@ -523,11 +480,10 @@ class CustomSchedule(tf.keras.optimizers.schedules.PolynomialDecay):
 
 
 num_train_steps = int(FLAGS.epochs * FLAGS.num_train_examples / FLAGS.train_batch_size)
-print('num_train_steps: {}'.format(num_train_steps))
+print(f'num_train_steps: {num_train_steps}')
 
 
-# In[18]:
-
+# ----------------------------------------------------------------------------------------
 
 with tpu_strategy.scope():
 
@@ -635,7 +591,7 @@ ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=100
 if ckpt_manager.latest_checkpoint:
     ckpt.restore(ckpt_manager.latest_checkpoint)
     last_epoch = int(ckpt_manager.latest_checkpoint.split("-")[-1])
-    print ('Latest BertNQ checkpoint restored -- Model trained for {} epochs'.format(last_epoch))
+    print (f'Latest BertNQ checkpoint restored -- Model trained for {last_epoch} epochs')
 else:
     print('Checkpoint not found. Train BertNQ from scratch')
     last_epoch = 0
@@ -678,7 +634,7 @@ for epoch in range(epochs):
 
     print("start iterating over train_dist_dataset ...")
 
-    for (batch_idx, dataset_inputs) in tqdm(enumerate(train_dist_dataset), desc='Epoch #'):
+    for (batch_idx, dataset_inputs) in enumerate(train_dist_dataset):
 
         batch_start_time = datetime.datetime.now()
 
@@ -731,10 +687,3 @@ for epoch in range(epochs):
 
     print('\nTime taken for 1 epoch: {} secs\n'.format(epoch_elapsed_time))
     print("-" * 80 + "\n")
-
-
-# In[ ]:
-
-
-
-
