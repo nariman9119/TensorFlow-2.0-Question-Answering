@@ -1,0 +1,5 @@
+nq-competition/bert-base-uncased/
+nq-competition/bert-large-uncased-whole-word-masking-finetuned-squad/
+nq-competition/distilbert-base-uncased-distilled-squad/
+nq-competition/sacremoses/
+nq-competition/transformers/
