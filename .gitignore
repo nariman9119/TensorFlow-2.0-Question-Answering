@@ -1,5 +1,5 @@
-nq-competition/bert-base-uncased/
-nq-competition/bert-large-uncased-whole-word-masking-finetuned-squad/
-nq-competition/distilbert-base-uncased-distilled-squad/
+nq-competition/bert-base-uncased/tf_model.h5
+nq-competition/bert-large-uncased-whole-word-masking-finetuned-squad/tf_model.h5
+nq-competition/distilbert-base-uncased-distilled-squad/tf_model.h5
 nq-competition/sacremoses/
 nq-competition/transformers/
